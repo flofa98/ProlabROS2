@@ -1,0 +1,91 @@
+#include <rclcpp/rclcpp.hpp>
+#include <nav2_util/simple_action_client.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav2_msgs/action/navigate_to_pose.hpp>
+#include <yaml-cpp/yaml.h>
+
+using namespace std::chrono_literals;
+using NavigateToPose = nav2_msgs::action::NavigateToPose;
+
+class WaypointNavigator : public rclcpp::Node {
+public:
+    WaypointNavigator() : Node("waypoint_navigator"), client_("navigate_to_pose", shared_from_this()) {
+        declare_parameter<std::string>("waypoint_file", "waypoints.yaml");
+        std::string yaml_path = get_parameter("waypoint_file").as_string();
+        RCLCPP_INFO(get_logger(), "Lade Wegpunkte von: %s", yaml_path.c_str());
+
+        auto waypoints = loadWaypoints(yaml_path);
+        RCLCPP_INFO(get_logger(), "Gesamtanzahl Wegpunkte: %zu", waypoints.size());
+
+        for (size_t i = 0; i < waypoints.size(); ++i) {
+            RCLCPP_INFO(get_logger(), "Sende Waypoint %zu...", i + 1);
+            if (!navigateToPose(waypoints[i])) {
+                RCLCPP_WARN(get_logger(), "Ziel %zu nicht erreicht.", i + 1);
+            } else {
+                RCLCPP_INFO(get_logger(), "Ziel %zu erreicht.", i + 1);
+            }
+            rclcpp::sleep_for(2s);
+        }
+
+        rclcpp::shutdown();
+    }
+
+private:
+    nav2_util::SimpleActionClient<NavigateToPose> client_;
+
+    std::vector<geometry_msgs::msg::PoseStamped> loadWaypoints(const std::string &file_path) {
+        std::vector<geometry_msgs::msg::PoseStamped> poses;
+        YAML::Node yaml = YAML::LoadFile(file_path);
+        for (const auto &wp : yaml["waypoints"]) {
+            geometry_msgs::msg::PoseStamped pose;
+            pose.header.frame_id = "map";
+            pose.header.stamp = now();
+            pose.pose.position.x = wp["position"]["x"].as<double>();
+            pose.pose.position.y = wp["position"]["y"].as<double>();
+            pose.pose.position.z = wp["position"]["z"].as<double>();
+            pose.pose.orientation.x = wp["orientation"]["x"].as<double>();
+            pose.pose.orientation.y = wp["orientation"]["y"].as<double>();
+            pose.pose.orientation.z = wp["orientation"]["z"].as<double>();
+            pose.pose.orientation.w = wp["orientation"]["w"].as<double>();
+            poses.push_back(pose);
+        }
+        return poses;
+    }
+
+    bool navigateToPose(const geometry_msgs::msg::PoseStamped &pose) {
+        if (!client_.wait_for_action_server(10s)) {
+            RCLCPP_ERROR(get_logger(), "Nav2 Action Server nicht erreichbar.");
+            return false;
+        }
+
+        NavigateToPose::Goal goal;
+        goal.pose = pose;
+
+        auto future_result = client_.async_send_goal(goal);
+        if (rclcpp::spin_until_future_complete(shared_from_this(), future_result) != rclcpp::FutureReturnCode::SUCCESS) {
+            RCLCPP_ERROR(get_logger(), "Fehler beim Senden des Ziels.");
+            return false;
+        }
+
+        auto goal_handle = future_result.get();
+        if (!goal_handle) {
+            RCLCPP_ERROR(get_logger(), "Ziel wurde vom Server abgelehnt.");
+            return false;
+        }
+
+        auto result_future = client_.async_get_result(goal_handle);
+        if (rclcpp::spin_until_future_complete(shared_from_this(), result_future) != rclcpp::FutureReturnCode::SUCCESS) {
+            RCLCPP_ERROR(get_logger(), "Keine Rückmeldung vom Server.");
+            return false;
+        }
+
+        return result_future.get()->result->result == nav2_msgs::action::NavigateToPose_Result::SUCCEEDED;
+    }
+};
+
+int main(int argc, char **argv) {
+    rclcpp::init(argc, argv);
+    std::make_shared<WaypointNavigator>();
+    rclcpp::spin(rclcpp::Node::make_shared("keep_alive"));  // damit shutdown klappt
+    return 0;
+}

@@ -27,4 +27,25 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+find_package(yaml-cpp REQUIRED)
+
+add_executable(way_point_follower src/turtlebot3_waypoint_nav/way_point_follower.cpp)
+ament_target_dependencies(
+  waypoint_navigator
+  rclcpp
+  geometry_msgs
+  nav2_msgs
+  nav2_util
+  tf2
+  tf2_geometry_msgs
+  tf2_ros
+  yaml-cpp
+)
+
+install(TARGETS
+  waypoint_navigator
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+
 ament_package()
